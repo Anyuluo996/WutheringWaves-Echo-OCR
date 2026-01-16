@@ -100,6 +100,7 @@ jobs:
           --standalone --onefile `
           --enable-plugin=pyside6 `
           --windows-uac-admin `
+          --assume-yes-for-downloads `
           --include-package-data=rapidocr_onnxruntime `
           --include-data-dir=models=models `
           --include-data-dir=data=data `
@@ -110,7 +111,7 @@ jobs:
           --windows-product-version="${{ env.NUITKA_VERSION }}" `
           --windows-file-description="鸣潮辅助工具" `
           --windows-icon-from-ico=android-chrome-512x512.ico `
-          --disable-console `
+          --windows-console-mode=disable `
           --output-filename="鸣潮声骸评分工具.exe" `
           --output-dir=dist `
           main.py
