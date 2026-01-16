@@ -26,7 +26,19 @@ jobs:
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.txt
-        pip install nuitka
+        pip install nuitka imageio
+
+    - name: Convert PNG to ICO
+      run: |
+        python -c "from PIL import Image; img = Image.open('android-chrome-512x512.png'); sizes = [(16,16), (32,32), (48,48), (64,64), (128,128), (256,256)]; img.save('android-chrome-512x512.ico', format='ICO', sizes=sizes)"
+        if (Test-Path "android-chrome-512x512.ico") {
+          Write-Host "✅ Icon converted successfully"
+          Get-Item android-chrome-512x512.ico | Select-Object Name, Length
+        } else {
+          Write-Host "❌ Icon conversion failed"
+          exit 1
+        }
+      shell: pwsh
 
     - name: Extract version from tag
       id: get_version
@@ -58,7 +70,7 @@ jobs:
           --windows-file-version="${{ env.VERSION }}" `
           --windows-product-version="${{ env.VERSION }}" `
           --windows-file-description="鸣潮辅助工具" `
-          --windows-icon-from-ico=android-chrome-512x512.png `
+          --windows-icon-from-ico=android-chrome-512x512.ico `
           --disable-console `
           --output-filename="鸣潮声骸评分工具.exe" `
           --output-dir=dist `

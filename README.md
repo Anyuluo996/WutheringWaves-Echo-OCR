@@ -129,13 +129,15 @@ WutheringWaves-Echo-OCR/
 
 ## 🔧 开发说明
 
-### 本地构建
+### 手动构建（仅用于开发测试）
 
-
-**手动构建**：
 ```bash
-# 安装 Nuitka
-pip install nuitka
+# 安装依赖
+pip install -r requirements.txt
+pip install nuitka imageio
+
+# 转换图标（PNG -> ICO）
+python -c "from PIL import Image; img = Image.open('android-chrome-512x512.png'); sizes = [(16,16), (32,32), (48,48), (64,64), (128,128), (256,256)]; img.save('android-chrome-512x512.ico', format='ICO', sizes=sizes)"
 
 # 构建可执行文件
 python -m nuitka --standalone --onefile \
@@ -150,15 +152,12 @@ python -m nuitka --standalone --onefile \
        --windows-file-version="1.0.0.0" \
        --windows-product-version="1.0.0.0" \
        --windows-file-description="鸣潮辅助工具" \
-       --windows-icon-from-ico=android-chrome-512x512.png \
+       --windows-icon-from-ico=android-chrome-512x512.ico \
        --disable-console \
        --output-filename="鸣潮声骸评分工具.exe" \
        --output-dir=dist \
        main.py
 ```
-
-
-
 
 
 ## 🐛 故障排除
