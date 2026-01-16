@@ -121,6 +121,7 @@ jobs:
       id: create_release
       uses: softprops/action-gh-release@v1
       with:
+        tag_name: ${{ github.ref_name }}
         files: dist/鸣潮声骸评分工具.exe
         draft: false
         prerelease: false
