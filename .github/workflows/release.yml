@@ -1,0 +1,107 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'  # 触发条件：推送类似 v1.0.0 的标签
+  workflow_dispatch:  # 允许手动触发
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install nuitka
+
+    - name: Extract version from tag
+      id: get_version
+      run: |
+        if ("${{ github.ref }}" -match "refs/tags/v(.[0-9]+\.[0-9]+\.[0-9]+)") {
+          $version = $matches[1]
+          echo "VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          echo "version=$version" >> $env:GITHUB_OUTPUT
+        }
+      shell: pwsh
+
+    - name: Update VERSION file
+      run: |
+        echo "${{ env.VERSION }}" > VERSION
+      shell: bash
+
+    - name: Build with Nuitka
+      run: |
+        python -m nuitka `
+          --standalone --onefile `
+          --enable-plugin=pyside6 `
+          --windows-uac-admin `
+          --include-package-data=rapidocr_onnxruntime `
+          --include-data-dir=models=models `
+          --include-data-dir=data=data `
+          --include-data-dir=config=config `
+          --windows-company-name="WW-Echo-OCR" `
+          --windows-product-name="鸣潮声骸评分工具" `
+          --windows-file-version="${{ env.VERSION }}" `
+          --windows-product-version="${{ env.VERSION }}" `
+          --windows-file-description="鸣潮辅助工具" `
+          --windows-icon-from-ico=android-chrome-512x512.png `
+          --disable-console `
+          --output-filename="鸣潮声骸评分工具.exe" `
+          --output-dir=dist `
+          main.py
+      shell: pwsh
+
+    - name: Create Release
+      id: create_release
+      uses: softprops/action-gh-release@v1
+      with:
+        files: dist/鸣潮声骸评分工具.exe
+        draft: false
+        prerelease: false
+        generate_release_notes: true
+        name: Release v${{ steps.get_version.outputs.version }}
+        body: |
+          ## 鸣潮声骸评分工具 v${{ steps.get_version.outputs.version }}
+
+          ### 下载说明
+          - 下载 `鸣潮声骸评分工具.exe` 即可
+          - 首次运行可能需要管理员权限
+          - Windows 可能会提示安全警告，点击"更多信息"即可运行
+
+          ### 更新内容
+          详见 [CHANGELOG.md](https://github.com/Anyuluo996/WutheringWaves-Echo-OCR/blob/main/CHANGELOG.md)
+
+          ### 系统要求
+          - Windows 10/11 64位
+          - 无需安装 Python 或其他依赖
+
+          ### 使用方法
+          1. 双击运行 `鸣潮声骸评分工具.exe`
+          2. 按 `Ctrl + Shift + Q` 截图识别声骸
+          3. 查看评分结果
+
+          ---
+          由 [WutheringWaves-Echo-OCR](https://github.com/Anyuluo996/WutheringWaves-Echo-OCR) 自动构建
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: WutheringWaves-Echo-OCR-v${{ steps.get_version.outputs.version }}
+        path: dist/鸣潮声骸评分工具.exe
+        retention-days: 90

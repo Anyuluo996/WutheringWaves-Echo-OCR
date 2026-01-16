@@ -1,0 +1,14 @@
+window:
+  width: 800
+  height: 600
+  remember_position: true
+  x: 100
+  y: 100
+hotkeys:
+  screenshot: Ctrl+Alt+[
+  quick_snip: Ctrl+Shift+Q
+  ocr: Ctrl+Alt+]
+ocr:
+  dpi_aware: true
+  timeout: 5000
+default_role: 今汐
