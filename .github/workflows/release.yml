@@ -43,11 +43,50 @@ jobs:
     - name: Extract version from tag
       id: get_version
       run: |
+        # 尝试从 tag 提取版本号
         if ("${{ github.ref }}" -match "refs/tags/v(.[0-9]+\.[0-9]+\.[0-9]+)") {
           $version = $matches[1]
-          echo "VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          echo "version=$version" >> $env:GITHUB_OUTPUT
+        } else {
+          # 如果 tag 格式不对，尝试从 VERSION 文件读取
+          if (Test-Path "VERSION") {
+            $version = Get-Content "VERSION" -First 1
+            $version = $version.Trim()
+          } else {
+            Write-Host "❌ 无法获取版本号"
+            exit 1
+          }
         }
+
+        # 转换为 Nuitka 要求的格式 (X.Y.Z.W)
+        # 例如：1.0.0 -> 1.0.0.0
+        if ($version -match "^([0-9]+\.[0-9]+\.[0-9]+)$") {
+          $nuitka_version = "$version.0"
+        } elseif ($version -match "^([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)$") {
+          $nuitka_version = $version
+        } else {
+          Write-Host "❌ 版本号格式错误: $version"
+          Write-Host "   正确格式: X.Y.Z (例如 1.0.0)"
+          exit 1
+        }
+
+        Write-Host "✅ 版本号: $version"
+        Write-Host "✅ Nuitka 版本: $nuitka_version"
+
+        # 设置环境变量和输出
+        echo "VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+        echo "NUITKA_VERSION=$nuitka_version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+        echo "version=$version" >> $env:GITHUB_OUTPUT
+        echo "nuitka_version=$nuitka_version" >> $env:GITHUB_OUTPUT
+      shell: pwsh
+
+    - name: Verify version
+      run: |
+        if ([string]::IsNullOrEmpty("${{ env.VERSION }}")) {
+          Write-Host "❌ 版本号为空！"
+          exit 1
+        }
+        Write-Host "✅ 版本号验证通过: ${{ env.VERSION }}"
+        Write-Host "✅ Nuitka 版本: ${{ env.NUITKA_VERSION }}"
       shell: pwsh
 
     - name: Update VERSION file
@@ -67,8 +106,8 @@ jobs:
           --include-data-dir=config=config `
           --windows-company-name="WW-Echo-OCR" `
           --windows-product-name="鸣潮声骸评分工具" `
-          --windows-file-version="${{ env.VERSION }}" `
-          --windows-product-version="${{ env.VERSION }}" `
+          --windows-file-version="${{ env.NUITKA_VERSION }}" `
+          --windows-product-version="${{ env.NUITKA_VERSION }}" `
           --windows-file-description="鸣潮辅助工具" `
           --windows-icon-from-ico=android-chrome-512x512.ico `
           --disable-console `

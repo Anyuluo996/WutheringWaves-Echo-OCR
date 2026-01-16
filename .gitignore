@@ -236,3 +236,5 @@ desktop.ini
 Claude.md
 tests/
 CHANGELOG.md
+check_release.py
+.github/workflows/README.md
