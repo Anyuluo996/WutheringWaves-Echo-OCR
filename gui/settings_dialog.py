@@ -27,7 +27,7 @@ class SettingsDialog(QDialog):
 
         self.setWindowTitle("设置")
         self.setModal(True)
-        self.resize(500, 300)
+        self.resize(560, 420)
 
         self._init_ui()
 
@@ -60,12 +60,33 @@ class SettingsDialog(QDialog):
         hotkey_group.setLayout(hotkey_layout)
         layout.addWidget(hotkey_group)
 
+        # GitHub 更新设置组
+        github_group = QGroupBox("GitHub 更新设置")
+        github_layout = QFormLayout()
+
+        github_config = self.config.get("github", {})
+
+        self.proxy_edit = QLineEdit()
+        self.proxy_edit.setPlaceholderText("例如: http://127.0.0.1:17890")
+        self.proxy_edit.setText(str(github_config.get("proxy_url", "") or ""))
+        github_layout.addRow("代理地址:", self.proxy_edit)
+
+        self.token_edit = QLineEdit()
+        self.token_edit.setEchoMode(QLineEdit.Password)
+        self.token_edit.setPlaceholderText("可选，用于提高 GitHub 访问成功率/限速配额")
+        self.token_edit.setText(str(github_config.get("token", "") or ""))
+        github_layout.addRow("GitHub Token:", self.token_edit)
+
+        github_group.setLayout(github_layout)
+        layout.addWidget(github_group)
+
         # 说明文字
         tip_label = QLabel(
             "💡 提示:\n"
             "  - 点击输入框后，按下想要的快捷键组合\n"
             "  - 快捷键格式: Ctrl+Shift+字母 或 Ctrl+Alt+字母\n"
             "  - ✨ 全局热键，游戏内也能使用\n"
+            "  - GitHub 更新可选配置代理与 Token\n"
             "  - 修改后立即生效，无需重启"
         )
         tip_label.setStyleSheet("color: #666; font-size: 11px; padding: 10px;")
@@ -100,11 +121,18 @@ class SettingsDialog(QDialog):
                 self.config["hotkeys"] = {}
             self.config["hotkeys"].update(hotkeys)
 
+            github_settings = {
+                "proxy_url": self.proxy_edit.text().strip(),
+                "token": self.token_edit.text().strip(),
+            }
+            self.config.setdefault("github", {})
+            self.config["github"].update(github_settings)
+
             # 保存到文件
             with open(self.config_path, 'w', encoding='utf-8') as f:
                 yaml.safe_dump(self.config, f, allow_unicode=True, sort_keys=False)
 
-            logger.info(f"设置已保存: {hotkeys}")
+            logger.info(f"设置已保存: hotkeys={hotkeys}, github_proxy={github_settings['proxy_url']}")
 
             QMessageBox.information(
                 self,
@@ -112,7 +140,9 @@ class SettingsDialog(QDialog):
                 f"快捷键设置已保存:\n\n"
                 f"快速截图评分: {hotkeys['quick_snip']}\n"
                 f"截图: {hotkeys['screenshot']}\n"
-                f"OCR识别: {hotkeys['ocr']}\n\n"
+                f"OCR识别: {hotkeys['ocr']}\n"
+                f"代理地址: {github_settings['proxy_url'] or '未配置'}\n"
+                f"GitHub Token: {'已配置' if github_settings['token'] else '未配置'}\n\n"
                 f"✨ 全局热键已立即生效，游戏内也可使用"
             )
 

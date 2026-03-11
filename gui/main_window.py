@@ -8,15 +8,15 @@ from pathlib import Path
 from typing import Optional
 
 from PySide6.QtCore import Qt, QThread, Signal, Slot
-from PySide6.QtGui import QKeySequence, QShortcut, QPixmap, QImage
+from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QComboBox, QPushButton, QTextEdit,
-    QSpinBox, QGroupBox, QMessageBox, QFileDialog
+    QGroupBox, QMessageBox
 )
 import yaml
 
-from core.data_manager import DataManager
+from core.data_manager import DataManager, GITHUB_DOWNLOAD_TIMEOUT_SECONDS
 from core.calculator import EchoCalculator
 from core.ocr_parser import EchoOCRParser
 from core.screenshot import ScreenshotTool
@@ -26,20 +26,6 @@ from gui.snipping_widget import SnippingWidget
 from gui.settings_dialog import SettingsDialog
 
 logger = logging.getLogger(__name__)
-
-
-class ScreenshotThread(QThread):
-    """截图线程"""
-    finished = Signal(object)  # PIL Image
-
-    def __init__(self):
-        super().__init__()
-        self.tool = ScreenshotTool()
-
-    def run(self):
-        """执行截图"""
-        img = self.tool.capture_fullscreen(save=True)
-        self.finished.emit(img)
 
 
 class OCRThread(QThread):
@@ -82,6 +68,28 @@ class OCRThread(QThread):
             self.finished.emit({"success": False, "error": str(e)})
 
 
+class WeightUpdateThread(QThread):
+    """权重更新线程"""
+    finished = Signal(dict)
+
+    def __init__(self, proxy_url: str = "", github_token: str = ""):
+        super().__init__()
+        self.proxy_url = proxy_url.strip()
+        self.github_token = github_token.strip()
+
+    def run(self):
+        """执行权重更新"""
+        try:
+            result = DataManager().update_weights_from_github(
+                proxy_url=self.proxy_url or None,
+                github_token=self.github_token or None,
+            )
+            self.finished.emit({"success": True, "result": result})
+        except Exception as e:
+            logger.error(f"更新权重失败: {e}")
+            self.finished.emit({"success": False, "error": str(e)})
+
+
 class MainWindow(QMainWindow):
     """主窗口"""
 
@@ -91,7 +99,8 @@ class MainWindow(QMainWindow):
         self.calculator = EchoCalculator()
         self.config = self._load_config()
         self.screenshot_tool = ScreenshotTool()
-        self.ocr_parser = EchoOCRParser()
+        self.ocr_thread: Optional[OCRThread] = None
+        self.weight_update_thread: Optional[WeightUpdateThread] = None
 
         # 初始化全局热键管理器
         self.hotkey_manager = GlobalHotkeyManager()
@@ -113,19 +122,53 @@ class MainWindow(QMainWindow):
         config_path = Path(__file__).parent.parent / "config" / "settings.yaml"
         default_config = {
             "window": {"width": 800, "height": 600, "remember_position": False},
-            "hotkeys": {"screenshot": "Ctrl+Shift+A", "ocr": "Ctrl+Shift+S"},
+            "hotkeys": {
+                "quick_snip": "Ctrl+Shift+Q",
+                "screenshot": "Ctrl+Shift+A",
+                "ocr": "Ctrl+Shift+S",
+            },
             "ocr": {"dpi_aware": True, "timeout": 5000},
+            "github": {"proxy_url": "", "token": ""},
             "default_role": "今汐"
         }
 
         if config_path.exists():
             try:
                 with open(config_path, 'r', encoding='utf-8') as f:
-                    return yaml.safe_load(f) or default_config
+                    loaded_config = yaml.safe_load(f) or {}
+                for key, value in default_config.items():
+                    if isinstance(value, dict):
+                        merged_value = dict(value)
+                        merged_value.update(loaded_config.get(key, {}) or {})
+                        loaded_config[key] = merged_value
+                    else:
+                        loaded_config.setdefault(key, value)
+                return loaded_config
             except Exception as e:
                 logger.error(f"加载配置文件失败: {e}")
 
         return default_config
+
+    def _get_github_update_settings(self) -> dict:
+        """获取 GitHub 更新相关配置"""
+        github_config = self.config.get("github", {})
+        return {
+            "proxy_url": str(github_config.get("proxy_url", "") or "").strip(),
+            "github_token": str(github_config.get("token", "") or "").strip(),
+        }
+
+    def _get_update_weights_tooltip(self) -> str:
+        """生成更新权重按钮提示"""
+        github_settings = self._get_github_update_settings()
+        proxy_text = github_settings["proxy_url"] or "未配置"
+        token_text = "已配置" if github_settings["github_token"] else "未配置"
+        return (
+            f"从 GitHub 拉取最新权重到本地目录\n"
+            f"当前目录: {self.data_manager.weights_dir}\n"
+            f"下载超时: {GITHUB_DOWNLOAD_TIMEOUT_SECONDS} 秒\n"
+            f"代理: {proxy_text}\n"
+            f"GitHub Token: {token_text}"
+        )
 
     def _init_ui(self):
         """初始化 UI"""
@@ -172,6 +215,7 @@ class MainWindow(QMainWindow):
         layout = QHBoxLayout()
 
         self.role_combo = QComboBox()
+        self.role_combo.currentIndexChanged.connect(self._on_role_changed)
         self._load_roles()
 
         layout.addWidget(QLabel("选择角色:"))
@@ -188,11 +232,12 @@ class MainWindow(QMainWindow):
         # 成本选择
         cost_layout = QHBoxLayout()
         cost_layout.addWidget(QLabel("声骸成本:"))
-        self.cost_spin = QSpinBox()
-        self.cost_spin.setRange(1, 4)
-        self.cost_spin.setValue(4)
-        self.cost_spin.setSuffix("c")
-        cost_layout.addWidget(self.cost_spin)
+        self.cost_combo = QComboBox()
+        self.cost_combo.addItem("1c", 1)
+        self.cost_combo.addItem("3c", 3)
+        self.cost_combo.addItem("4c", 4)
+        self._set_cost_value(4)
+        cost_layout.addWidget(self.cost_combo)
         layout.addLayout(cost_layout)
 
         # 主词条输入
@@ -211,6 +256,23 @@ class MainWindow(QMainWindow):
 
         group.setLayout(layout)
         return group
+
+    def _get_cost_value(self) -> int:
+        """获取当前选中的声骸成本"""
+        return int(self.cost_combo.currentData() or 4)
+
+    def _set_cost_value(self, cost) -> None:
+        """设置声骸成本，仅允许 1/3/4"""
+        try:
+            normalized_cost = int(str(cost).strip().lower().replace("c", ""))
+        except (TypeError, ValueError):
+            normalized_cost = 4
+
+        value_to_index = {1: 0, 3: 1, 4: 2}
+        if normalized_cost not in value_to_index:
+            logger.warning(f"收到不支持的声骸成本: {cost}，已回退到 4c")
+            normalized_cost = 4
+        self.cost_combo.setCurrentIndex(value_to_index[normalized_cost])
 
     def _create_action_section(self) -> QGroupBox:
         """创建操作按钮区"""
@@ -240,6 +302,12 @@ class MainWindow(QMainWindow):
         self.calc_button.clicked.connect(self._on_calculate)
         layout.addWidget(self.calc_button)
 
+        # 更新权重按钮
+        self.update_weights_button = QPushButton("🔄 更新权重")
+        self.update_weights_button.setToolTip(self._get_update_weights_tooltip())
+        self.update_weights_button.clicked.connect(self._on_update_weights)
+        layout.addWidget(self.update_weights_button)
+
         # 设置按钮
         self.settings_button = QPushButton("⚙️ 设置")
         self.settings_button.clicked.connect(self._on_settings)
@@ -265,20 +333,24 @@ class MainWindow(QMainWindow):
         group.setLayout(layout)
         return group
 
-    def _load_roles(self):
+    def _load_roles(self, selected_role: Optional[str] = None):
         """加载角色列表"""
         roles = self.data_manager.get_all_roles()
+        target_role = selected_role or self.role_combo.currentText() or self.config.get("default_role", "今汐")
+
+        self.role_combo.blockSignals(True)
         self.role_combo.clear()
         self.role_combo.addItems(roles)
 
-        # 设置默认角色
-        default_role = self.config.get("default_role", "今汐")
-        index = self.role_combo.findText(default_role)
+        index = self.role_combo.findText(target_role)
+        if index < 0 and self.role_combo.count() > 0:
+            index = 0
         if index >= 0:
             self.role_combo.setCurrentIndex(index)
+        self.role_combo.blockSignals(False)
 
-        # 连接角色改变信号，同步到快速截图
-        self.role_combo.currentIndexChanged.connect(self._on_role_changed)
+        if self.role_combo.count() > 0:
+            self._on_role_changed(self.role_combo.currentIndex())
 
     def _setup_hotkeys(self):
         """设置全局快捷键"""
@@ -393,9 +465,7 @@ class MainWindow(QMainWindow):
         if parsed:
             # 填充表单
             cost = parsed.get("cost", 4)
-            if isinstance(cost, str):
-                cost = int(cost)
-            self.cost_spin.setValue(cost)
+            self._set_cost_value(cost)
 
             # 格式化主词条（支持2个主词条）
             main_props = parsed.get("main_props", [])
@@ -419,7 +489,6 @@ class MainWindow(QMainWindow):
             # 显示所有主词条候选（如果有更多）
             all_main_candidates = parsed.get("all_main_candidates", [])
             if len(all_main_candidates) > len(main_props):
-                candidate_text = "\n".join([f"{prop} {value}" for prop, value in all_main_candidates])
                 self.result_text.append(f"\n[系统] 检测到 {len(all_main_candidates)} 个主词条候选，")
                 self.result_text.append(f"[系统] 已选择前 {len(main_props)} 个，其余已丢弃")
 
@@ -438,7 +507,7 @@ class MainWindow(QMainWindow):
     def _on_calculate(self):
         """计算得分按钮点击事件"""
         role_name = self.role_combo.currentText()
-        cost = self.cost_spin.value()
+        cost = self._get_cost_value()
         main_prop = self.main_prop_input.toPlainText().strip()
         sub_props_text = self.sub_props_input.toPlainText().strip()
 
@@ -453,13 +522,13 @@ class MainWindow(QMainWindow):
                 line = line.strip()
                 if not line:
                     continue
-                parts = line.split()
-                if len(parts) >= 2:
-                    prop_name = parts[0]
-                    try:
-                        value = float(parts[1])
+                parts = line.rsplit(maxsplit=1)
+                if len(parts) == 2:
+                    prop_name, value_text = parts
+                    value = self.calculator.extract_number(value_text)
+                    if value is not None:
                         sub_props.append((prop_name, value))
-                    except ValueError:
+                    else:
                         logger.warning(f"副词条数值格式错误: {line}")
 
         logger.info(f"[主窗口] 开始计算得分: role={role_name}, cost={cost}")
@@ -492,6 +561,65 @@ class MainWindow(QMainWindow):
         else:
             self.result_text.setText("计算失败，请检查输入")
             self.statusBar().showMessage("计算失败")
+
+    @Slot()
+    def _on_update_weights(self):
+        """从 GitHub 更新最新权重"""
+        if self.weight_update_thread and self.weight_update_thread.isRunning():
+            return
+
+        github_settings = self._get_github_update_settings()
+        proxy_enabled = "已启用" if github_settings["proxy_url"] else "未启用"
+        token_enabled = "已配置" if github_settings["github_token"] else "未配置"
+
+        self.update_weights_button.setEnabled(False)
+        self.statusBar().showMessage(f"正在从 GitHub 更新权重（超时 {GITHUB_DOWNLOAD_TIMEOUT_SECONDS} 秒）...")
+        self.result_text.append(
+            f"\n[系统] 正在更新本地权重，请稍候... 超时: {GITHUB_DOWNLOAD_TIMEOUT_SECONDS} 秒 / 代理: {proxy_enabled} / Token: {token_enabled}"
+        )
+
+        self.weight_update_thread = WeightUpdateThread(**github_settings)
+        self.weight_update_thread.finished.connect(self._on_update_weights_finished)
+        self.weight_update_thread.start()
+
+    @Slot(dict)
+    def _on_update_weights_finished(self, payload: dict):
+        """权重更新完成回调"""
+        self.update_weights_button.setEnabled(True)
+
+        if not payload.get("success"):
+            error_message = payload.get("error", "未知错误")
+            self.statusBar().showMessage("权重更新失败", 5000)
+            self.result_text.append(f"[权重更新] 失败: {error_message}")
+            QMessageBox.critical(self, "更新权重失败", error_message)
+            return
+
+        result = payload.get("result", {})
+        current_role = self.role_combo.currentText()
+        self._load_roles(selected_role=current_role)
+
+        repaired_count = len(result.get("repaired_files", []))
+        invalid_count = len(result.get("invalid_files", []))
+        summary = (
+            f"本地权重目录: {result.get('weights_dir', self.data_manager.weights_dir)}\n"
+            f"下载超时: {GITHUB_DOWNLOAD_TIMEOUT_SECONDS} 秒\n"
+            f"代理: {'已启用' if result.get('used_proxy') else '未启用'}\n"
+            f"GitHub Token: {'已配置' if result.get('used_github_token') else '未配置'}\n"
+            f"新增文件: {result.get('added_files', 0)}\n"
+            f"更新文件: {result.get('updated_files', 0)}\n"
+            f"跳过未变化: {result.get('skipped_files', 0)}\n"
+            f"自动修复: {repaired_count}\n"
+            f"无效文件: {invalid_count}\n"
+            f"已加载角色: {result.get('loaded_roles', len(self.data_manager.get_all_roles()))}"
+        )
+
+        self.result_text.append(
+            f"[权重更新] 完成：新增 {result.get('added_files', 0)}，"
+            f"更新 {result.get('updated_files', 0)}，修复 {repaired_count}，"
+            f"无效 {invalid_count}"
+        )
+        self.statusBar().showMessage("权重更新完成", 5000)
+        QMessageBox.information(self, "权重更新完成", summary)
 
     @Slot()
     def _on_quick_snip(self):
@@ -602,8 +730,14 @@ class MainWindow(QMainWindow):
         self.quick_snip_button.setToolTip(f"快捷键: {hotkeys.get('quick_snip', 'Ctrl+Shift+Q')}")
         self.screenshot_button.setToolTip(f"快捷键: {hotkeys.get('screenshot', 'Ctrl+Shift+A')}")
         self.ocr_button.setToolTip(f"快捷键: {hotkeys.get('ocr', 'Ctrl+Shift+S')}")
+        self.update_weights_button.setToolTip(self._get_update_weights_tooltip())
 
         self.statusBar().showMessage("设置已更改，全局快捷键已更新", 5000)
+
+    def closeEvent(self, event: QCloseEvent):
+        """主窗口关闭时清理全局热键"""
+        self.hotkey_manager.clear_hotkeys()
+        super().closeEvent(event)
 
 
 def main():

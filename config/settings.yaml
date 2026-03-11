@@ -11,4 +11,7 @@ hotkeys:
 ocr:
   dpi_aware: true
   timeout: 5000
+github:
+  proxy_url: ""
+  token: ""
 default_role: 今汐

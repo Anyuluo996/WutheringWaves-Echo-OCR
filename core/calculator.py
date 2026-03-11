@@ -99,6 +99,30 @@ class EchoCalculator:
 
         return None
 
+    def _get_score_max(self, config: WeightConfig, cost_key: str) -> float:
+        """安全获取对应 cost 的最高分"""
+        cost_index_map = {"1": 0, "3": 1, "4": 2}
+        score_max_index = cost_index_map.get(cost_key)
+        if score_max_index is None:
+            logger.warning(f"无法识别的声骸成本: {cost_key}")
+            return 0.0
+
+        if score_max_index >= len(config.score_max):
+            logger.warning(f"score_max 缺少成本 {cost_key}c 对应索引: {config.score_max}")
+            return 0.0
+
+        try:
+            score_max = float(config.score_max[score_max_index])
+        except (TypeError, ValueError):
+            logger.warning(f"score_max 数值无效: {config.score_max}")
+            return 0.0
+
+        if score_max <= 0:
+            logger.warning(f"score_max 非正数，无法对齐计算: {score_max}")
+            return 0.0
+
+        return score_max
+
     def calculate_main_score(
         self,
         prop_name: str,
@@ -155,13 +179,13 @@ class EchoCalculator:
                 except ValueError:
                     pass
 
-            # 单独的属性名 (没有数值) - 这种情况权重为0
+            # 单独的属性名（兼容旧输入：只有属性名，没有数值）
             normalized_prop = self.normalize_prop_name(prop_parts[i])
             if normalized_prop:
                 weight = main_weights.get(normalized_prop, 0.0)
-                score = 0.0  # 没有数值，得分为0
+                score = weight
                 total_score += score
-                logger.info(f"[计算器] 主词条(无数值): {prop_parts[i]} -> 权重={weight}, 得分={score}")
+                logger.info(f"[计算器] 主词条(无数值兼容): {prop_parts[i]} -> 权重={weight}, 得分={score}")
                 details.append((prop_parts[i], score))
             else:
                 logger.warning(f"[计算器] 无法识别属性名: {prop_parts[i]}")
@@ -240,10 +264,7 @@ class EchoCalculator:
             logger.error(f"不支持的声骸成本: {cost}")
             return None
 
-        # 获取对应的最高分索引
-        cost_index_map = {"1": 0, "3": 1, "4": 2}
-        score_max_index = cost_index_map.get(cost_key, 0)
-        score_max = config.score_max[score_max_index]
+        score_max = self._get_score_max(config, cost_key)
 
         # 计算主词条得分（原始权重）
         main_score_raw, main_details_raw = self.calculate_main_score(main_prop, cost, config)
@@ -262,8 +283,12 @@ class EchoCalculator:
         sub_score_aligned = (sub_score_raw / score_max) * 50 if score_max > 0 else 0
 
         # 对齐每个词条的详细得分
-        main_details_aligned = [(name, (score / score_max) * 50) for name, score in main_details_raw]
-        sub_details_aligned = [(name, (score / score_max) * 50) for name, score in sub_details_raw]
+        if score_max > 0:
+            main_details_aligned = [(name, (score / score_max) * 50) for name, score in main_details_raw]
+            sub_details_aligned = [(name, (score / score_max) * 50) for name, score in sub_details_raw]
+        else:
+            main_details_aligned = [(name, 0.0) for name, _ in main_details_raw]
+            sub_details_aligned = [(name, 0.0) for name, _ in sub_details_raw]
 
         logger.info(f"[计算器] 原始得分: 主={main_score_raw:.3f}, 副={sub_score_raw:.3f}, 总={total_raw:.3f}")
         logger.info(f"[计算器] 对齐得分(50分制): 主={main_score_aligned:.2f}, 副={sub_score_aligned:.2f}, 总={aligned_score:.2f}")
