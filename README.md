@@ -149,8 +149,8 @@ python -m nuitka --standalone --onefile \
        --include-data-dir=config=config \
        --windows-company-name="WW-Echo-OCR" \
        --windows-product-name="鸣潮声骸评分工具" \
-       --windows-file-version="1.0.0.0" \
-       --windows-product-version="1.0.0.0" \
+       --windows-file-version="1.0.1.0" \
+       --windows-product-version="1.0.1.0" \
        --windows-file-description="鸣潮辅助工具" \
        --windows-icon-from-ico=android-chrome-512x512.ico \
        --disable-console \
